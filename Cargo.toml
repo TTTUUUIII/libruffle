@@ -1,0 +1,18 @@
+[package]
+name = "libruffle"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+jni = "0.21.1"
+ndk = "0.9.0"
+ndk-sys = "0.6.0"
+
+ruffle_core ={ git = "https://github.com/ruffle-rs/ruffle", branch = "master" }
+ruffle_video_software = { git = "https://github.com/ruffle-rs/ruffle", branch = "master"}
+ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle", branch = "master"}
+ruffle_render = { git = "https://github.com/ruffle-rs/ruffle", branch = "master"}
+lazy_static = "1.5.0"
+log = "0.4.27"
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15.1"
