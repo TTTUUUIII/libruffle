@@ -2,8 +2,8 @@ This is a ruffle library suitable for [WkuWku](https://github.com/TTTUUUIII/WKuW
 
 Known issues:
 
-    - black screen issue occurs;
+- black screen issue occurs;
 
-    - incorrect video scaling in portrait mode;
+- incorrect video scaling in portrait mode;
 
-    - performance is terrible.
+- performance is terrible.
