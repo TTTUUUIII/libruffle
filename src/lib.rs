@@ -1,4 +1,4 @@
-mod audio;
+mod media;
 mod input;
 mod util;
 use std::{
@@ -34,17 +34,15 @@ use ruffle_render_wgpu::{
 };
 
 use crate::{
-    audio::AAudioAudioBackend,
     input::{
-        InputDispatcher, KeyEvent, PointerEvent, KEY_DOWN, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_MASK, RETRO_DEVICE_ID_JOYPAD_RIGHT, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_X, RETRO_DEVICE_ID_JOYPAD_Y, RETRO_DEVICE_ID_POINTER_PRESSED, RETRO_DEVICE_ID_POINTER_X, RETRO_DEVICE_ID_POINTER_Y, RETRO_DEVICE_JOYPAD, RETRO_DEVICE_POINTER
-    },
-    util::{JniUtils, Properties},
+        InputDispatcher, KeyEvent, PointerEvent, KEY_DOWN, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_L, RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_MASK, RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_RIGHT, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_X, RETRO_DEVICE_ID_JOYPAD_Y, RETRO_DEVICE_ID_POINTER_PRESSED, RETRO_DEVICE_ID_POINTER_X, RETRO_DEVICE_ID_POINTER_Y, RETRO_DEVICE_JOYPAD, RETRO_DEVICE_POINTER
+    }, media::AAudioAudioBackend, util::{JniUtils, Properties}
 };
 
 enum RuffleEvent {
     AttachSurface(NativeWindow),
     AdjustSurfaceSize(i32, i32),
-    DetachSurface(),
+    DetachSurface,
     Kill,
 }
 
@@ -84,7 +82,7 @@ fn em_adjust_surface_size(_env: JNIEnv, _thiz: JObject, vw: jint, vh: jint) {
 }
 
 fn em_detach_surface(_env: JNIEnv, _thiz: JObject) {
-    // do nothing
+    send_event(RuffleEvent::DetachSurface);
 }
 
 fn em_stop(_env: JNIEnv, _thiz: JObject) {
@@ -113,15 +111,12 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
             .unwrap()
             .get_float(PROP_DISPLAY_SCALED_DENSITY, 1.0) as f64;
 
-        let mut vw: u32 = 0;
-        let mut vh: u32 = 0;
-        let pointer_pressed = false;
         loop {
             match poll_event() {
                 Ok(event) => match event {
                     RuffleEvent::AttachSurface(window) => unsafe {
-                        vw = window.width() as u32;
-                        vh = window.height() as u32;
+                        let vw: u32 = window.width() as u32;
+                        let vh: u32 = window.height() as u32;
                         if let Some(player_mtx) = &player_ref {
                             let mut player = player_mtx.lock().unwrap();
                             let renderer = <dyn Any>::downcast_mut::<
@@ -168,35 +163,40 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
                             );
 
                             if let Some(player_mtx) = &player_ref {
-                                player_mtx.lock()
-                                    .unwrap()
-                                    .set_is_playing(true);
+                                let mut player = player_mtx.lock()
+                                    .unwrap();
+                                player.set_is_playing(true);
+                                let result = s_env.call_method(
+                                &s_thiz, 
+                                "onNativeVideoSizeChanged", 
+                                "(III)V", 
+                                &[JValue::from(player.movie_width() as i32), JValue::from(player.movie_height() as i32), JValue::from(0)]
+                                );
+                                if let Err(e) = result {
+                                    error!("Failed to report movie size! {e}");
+                                }
                             }
                         }
                     },
-                    RuffleEvent::AdjustSurfaceSize(w, h) => {
-                        vw = w as u32;
-                        vh = h as u32;
-                        let Some(player_mtx) = &player_ref else {
-                            break;
-                        };
-                        player_mtx
+                    RuffleEvent::AdjustSurfaceSize(vw, vh) => {
+                        if let Some(player_mtx) = &player_ref {
+                            player_mtx
                             .lock()
                             .unwrap()
                             .set_viewport_dimensions(ViewportDimensions {
-                                width: vw,
-                                height: vh,
+                                width: vw as u32,
+                                height: vh as u32,
                                 scale_factor: dpi_scale_factor,
                             });
+                        }
                     }
-                    RuffleEvent::DetachSurface() => {
-                        let Some(player_mtx) = &player_ref else {
-                            break;
-                        };
-                        player_mtx
+                    RuffleEvent::DetachSurface => {
+                        if let Some(player_mtx) = &player_ref {
+                            player_mtx
                             .lock()
                             .unwrap()
                             .set_is_playing(false);
+                        }
                     }
                     RuffleEvent::Kill => break,
                 },
@@ -216,7 +216,7 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
                     }
                     let audio =
                         <dyn Any>::downcast_mut::<AAudioAudioBackend>(player.audio_mut()).unwrap();
-                    audio.recreate_stream_if_needed();
+                    audio.keep_stream_valid();
                 }
 
                 for port in 0..1 {
@@ -226,7 +226,7 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
                             "onNativePollInput",
                             "(IIII)I",
                             &[
-                                JValue::from(0),
+                                JValue::from(port),
                                 JValue::from(RETRO_DEVICE_JOYPAD),
                                 JValue::from(0),
                                 JValue::from(RETRO_DEVICE_ID_JOYPAD_MASK),
@@ -257,6 +257,10 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
                     InputDispatcher::dispacth_key_event(KeyEvent::new(Keycode::ButtonSelect, state), &mut player);
                     state = status >> RETRO_DEVICE_ID_JOYPAD_START & 0x1;
                     InputDispatcher::dispacth_key_event(KeyEvent::new(Keycode::ButtonStart, state), &mut player);
+                    state = status >> RETRO_DEVICE_ID_JOYPAD_L & 0x1;
+                    InputDispatcher::dispacth_key_event(KeyEvent::new(Keycode::ButtonL1, state), &mut player);
+                    state = status >> RETRO_DEVICE_ID_JOYPAD_R & 0x1;
+                    InputDispatcher::dispacth_key_event(KeyEvent::new(Keycode::ButtonR1, state), &mut player);
                 }
                 let pressed = s_env
                     .call_method(
@@ -318,7 +322,7 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
     JNI_TRUE
 }
 
-fn em_set_prop(mut env: JNIEnv, thiz: JObject, k: JString, prop: JObject) {
+fn em_set_prop(mut env: JNIEnv, _thiz: JObject, k: JString, prop: JObject) {
     let key = JniUtils::to_string(&mut env, k);
     match key.as_str() {
         PROP_DISPLAY_SCALED_DENSITY => {
@@ -370,7 +374,7 @@ pub extern "C" fn JNI_OnLoad(vm: JavaVM, _reserved: *const c_void) -> jint {
         },
     ];
     assert!(
-        env.register_native_methods("com/outlook/wn123o/ruffletest/MainActivity", &methods)
+        env.register_native_methods("org/wkuwku/plug/ruffle/Ruffle", &methods)
             .is_ok()
     );
     let (tx, rx) = mpsc::channel::<RuffleEvent>();

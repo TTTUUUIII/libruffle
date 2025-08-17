@@ -24,12 +24,12 @@ impl AAudioAudioBackend {
             paused: true,
         };
 
-        result.recreate_stream()?;
+        result.open_stream()?;
 
         Ok(result)
     }
 
-    pub fn recreate_stream(&mut self) -> Result<(), Error> {
+    pub fn open_stream(&mut self) -> Result<(), Error> {
         let proxy = self.mixer.proxy();
 
         let stream = AudioStreamBuilder::new()?
@@ -55,11 +55,11 @@ impl AAudioAudioBackend {
         Ok(())
     }
 
-    pub fn recreate_stream_if_needed(&mut self) {
+    pub fn keep_stream_valid(&mut self) {
         let stream_state = self.stream.as_ref().unwrap().state();
         if stream_state == AudioStreamState::Disconnected {
             // I'm sure it's fine...
-            let _ = self.recreate_stream();
+            let _ = self.open_stream();
         }
     }
 }

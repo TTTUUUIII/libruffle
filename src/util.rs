@@ -22,7 +22,7 @@ impl JniUtils{
 
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Type {
     I(i32),
     F(f32),

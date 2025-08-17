@@ -19,10 +19,10 @@ pub const RETRO_DEVICE_ID_JOYPAD_A: i32         = 8;
 pub const RETRO_DEVICE_ID_JOYPAD_X: i32         = 9;
 pub const RETRO_DEVICE_ID_JOYPAD_L: i32         = 10;
 pub const RETRO_DEVICE_ID_JOYPAD_R: i32         = 11;
-pub const RETRO_DEVICE_ID_JOYPAD_L2: i32        = 12;
-pub const RETRO_DEVICE_ID_JOYPAD_R2: i32        = 13;
-pub const RETRO_DEVICE_ID_JOYPAD_L3: i32        = 14;
-pub const RETRO_DEVICE_ID_JOYPAD_R3: i32        = 15;
+// pub const RETRO_DEVICE_ID_JOYPAD_L2: i32        = 12;
+// pub const RETRO_DEVICE_ID_JOYPAD_R2: i32        = 13;
+// pub const RETRO_DEVICE_ID_JOYPAD_L3: i32        = 14;
+// pub const RETRO_DEVICE_ID_JOYPAD_R3: i32        = 15;
 pub const RETRO_DEVICE_ID_JOYPAD_MASK: i32      = 256;
 
 pub const RETRO_DEVICE_ID_POINTER_X: i32        = 0;
@@ -291,8 +291,6 @@ impl InputDispatcher {
         let key: i32 = event.key.into();
         if let Some(key_state) = ROUTE_TABLE.lock().unwrap().get_mut(&key) {
             if key_state.state != event.state {
-                let w = player.viewport_dimensions().width as f64;
-                let h = player.viewport_dimensions().height as f64;
                 if event.state == KEY_DOWN {
                     player.handle_event(
                         PlayerEvent::KeyDown { 
