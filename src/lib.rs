@@ -1,129 +1,145 @@
-mod utils;
+mod audio;
+mod input;
+mod util;
 use std::{
-    cell::OnceCell,
+    any::Any,
     os::raw::c_void,
     ptr::NonNull,
     sync::{
-        Arc, Mutex, RwLock,
-        mpsc::{self, Sender},
+        Arc, Mutex,
+        mpsc::{self, Receiver, Sender},
     },
     thread::{self, JoinHandle},
     time::Instant,
 };
 
 use jni::{
-    JNIEnv,
-    objects::{JObject, JString},
-    sys::{JNI_FALSE, JNI_TRUE, JNI_VERSION_1_6},
+    JNIEnv, JavaVM, NativeMethod,
+    objects::{JObject, JString, JValue},
+    sys::{JNI_TRUE, JNI_VERSION_1_6, jboolean, jint},
 };
-use log::{debug, error, info, warn};
-use ndk::native_window::NativeWindow;
-use ndk_sys::{ANativeWindow, ANativeWindow_fromSurface};
+use log::{LevelFilter, error, info};
+use ndk::{event::Keycode, native_window::NativeWindow};
+use ndk_sys::ANativeWindow_fromSurface;
 use ruffle_core::{
-    Player, PlayerBuilder, ViewportDimensions, backend::log::LogBackend, tag_utils::SwfMovie,
+    backend::log::NullLogBackend, config::Letterbox, tag_utils::SwfMovie, Player, PlayerBuilder, ViewportDimensions
 };
-use ruffle_render::backend::RenderBackend;
 use ruffle_render_wgpu::{
     backend::WgpuRenderBackend,
-    target::TextureTarget,
+    target::SwapChainTarget,
     wgpu::{
         Backends, PowerPreference, SurfaceTargetUnsafe,
         rwh::{AndroidDisplayHandle, HasWindowHandle, RawDisplayHandle},
     },
 };
-use ruffle_video_software::backend::SoftwareVideoBackend;
 
-use crate::utils::JniUtils;
-
-type JBoolean = u8;
-type JInt = i32;
-
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
-#[derive(PartialEq)]
-enum State {
-    IDLE,
-    RUNNING,
-    PAUSED,
-}
-
-struct PrintWriter;
-
-impl PrintWriter {
-    fn new() -> Self {
-        PrintWriter {}
-    }
-}
-
-impl LogBackend for PrintWriter {
-    fn avm_trace(&self, message: &str) {
-        error!("{message}")
-    }
-
-    fn avm_warning(&self, message: &str) {
-        warn!("{message}")
-    }
-}
+use crate::{
+    audio::AAudioAudioBackend,
+    input::{
+        InputDispatcher, KeyEvent, PointerEvent, KEY_DOWN, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_MASK, RETRO_DEVICE_ID_JOYPAD_RIGHT, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_X, RETRO_DEVICE_ID_JOYPAD_Y, RETRO_DEVICE_ID_POINTER_PRESSED, RETRO_DEVICE_ID_POINTER_X, RETRO_DEVICE_ID_POINTER_Y, RETRO_DEVICE_JOYPAD, RETRO_DEVICE_POINTER
+    },
+    util::{JniUtils, Properties},
+};
 
 enum RuffleEvent {
     AttachSurface(NativeWindow),
     AdjustSurfaceSize(i32, i32),
+    DetachSurface(),
     Kill,
 }
 
+const PROP_DISPLAY_SCALED_DENSITY: &str = "display.density";
+
 static TX: Mutex<Option<Sender<RuffleEvent>>> = Mutex::new(None);
-static STATE: RwLock<State> = RwLock::new(State::IDLE);
+static RX: Mutex<Option<Receiver<RuffleEvent>>> = Mutex::new(None);
 static THREAD_HANDLE: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
-pub extern "C" fn em_attach_surface(mut env: JNIEnv, sf: JObject) {
-    if let Ok(tx_grant) = TX.lock() {
-        if let Some(tx) = &*tx_grant {
-            unsafe {
-                let window_ptr = ANativeWindow_fromSurface(env.get_raw(), sf.into_raw());
-                let window = NativeWindow::from_ptr(NonNull::new(window_ptr).unwrap());
-                tx.send(RuffleEvent::AttachSurface(window));
-            };
-        }
+static PROPS: Mutex<Properties> = Mutex::new(Properties::new());
+
+fn send_event(event: RuffleEvent) {
+    TX.lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .send(event)
+        .unwrap_or_else(|err| {
+            error!("Event send failed. {err}");
+        });
+}
+
+fn poll_event() -> Result<RuffleEvent, mpsc::TryRecvError> {
+    RX.lock().unwrap().as_ref().unwrap().try_recv()
+}
+
+fn em_attach_surface(env: JNIEnv, _thiz: JObject, _activity: JObject, sf: JObject) {
+    unsafe {
+        let window_ptr = ANativeWindow_fromSurface(env.get_raw(), sf.into_raw());
+        let window = NativeWindow::from_ptr(NonNull::new(window_ptr).unwrap());
+        send_event(RuffleEvent::AttachSurface(window));
     };
 }
 
-pub extern "C" fn em_adjust_surface_size(mut env: JNIEnv, vw: JInt, vh: JInt) {
-    if let Ok(tx_grant) = TX.lock() {
-        if let Some(tx) = &*tx_grant {
-            tx.send(RuffleEvent::AdjustSurfaceSize(vw, vh));
-        }
-    };
+fn em_adjust_surface_size(_env: JNIEnv, _thiz: JObject, vw: jint, vh: jint) {
+    send_event(RuffleEvent::AdjustSurfaceSize(vw, vh));
 }
 
-pub extern "C" fn em_stop(mut env: JNIEnv) {
-    if let Ok(tx_guard) = TX.lock() {
-        if let Some(tx) = tx_guard.as_ref() {
-            tx.send(RuffleEvent::Kill);
-        }
-    };
+fn em_detach_surface(_env: JNIEnv, _thiz: JObject) {
+    // do nothing
+}
+
+fn em_stop(_env: JNIEnv, _thiz: JObject) {
+    send_event(RuffleEvent::Kill);
     info!("Waiting main thread to exit...");
     let mut handle_guard = THREAD_HANDLE.lock().unwrap();
     if let Some(handle) = handle_guard.take() {
-        handle.join();
+        let _ = handle.join();
     }
 }
 
-pub extern "C" fn em_start(mut env: JNIEnv, path: JString) -> JBoolean {
+fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
     let filepath = JniUtils::to_string(&mut env, path);
-    let (tx, rx) = mpsc::channel::<RuffleEvent>();
-    *TX.lock().unwrap() = Some(tx);
+    let vm = env.get_java_vm().unwrap();
+    let s_thiz = env
+        .new_global_ref(thiz)
+        .expect("Failed to global thiz ref!");
     let handle = thread::spawn(move || {
         let mut player_ref: Option<Arc<Mutex<Player>>> = None;
         let mut prev_frame_time = Instant::now();
+        let mut s_env = vm
+            .attach_current_thread()
+            .expect("Failed to attach env thread");
+        let dpi_scale_factor = PROPS
+            .lock()
+            .unwrap()
+            .get_float(PROP_DISPLAY_SCALED_DENSITY, 1.0) as f64;
+
+        let mut vw: u32 = 0;
+        let mut vh: u32 = 0;
+        let pointer_pressed = false;
         loop {
-            match rx.try_recv() {
+            match poll_event() {
                 Ok(event) => match event {
-                    RuffleEvent::AttachSurface(window) => {
-                        let movie =
-                            SwfMovie::from_path(&filepath, None).expect("Failed to load swf file.");
-                        unsafe {
+                    RuffleEvent::AttachSurface(window) => unsafe {
+                        vw = window.width() as u32;
+                        vh = window.height() as u32;
+                        if let Some(player_mtx) = &player_ref {
+                            let mut player = player_mtx.lock().unwrap();
+                            let renderer = <dyn Any>::downcast_mut::<
+                                WgpuRenderBackend<SwapChainTarget>,
+                            >(player.renderer_mut())
+                            .unwrap();
+                            let _ = renderer.recreate_surface_unsafe(
+                                SurfaceTargetUnsafe::RawHandle {
+                                    raw_display_handle: RawDisplayHandle::Android(
+                                        AndroidDisplayHandle::new(),
+                                    ),
+                                    raw_window_handle: window.window_handle().unwrap().into(),
+                                },
+                                (vw, vh),
+                            );
+                            player.set_is_playing(true);
+                        } else {
+                            let movie = SwfMovie::from_path(&filepath, None).unwrap();
                             let renderer = WgpuRenderBackend::for_window_unsafe(
                                 SurfaceTargetUnsafe::RawHandle {
                                     raw_display_handle: RawDisplayHandle::Android(
@@ -131,7 +147,7 @@ pub extern "C" fn em_start(mut env: JNIEnv, path: JString) -> JBoolean {
                                     ),
                                     raw_window_handle: window.window_handle().unwrap().into(),
                                 },
-                                (window.width() as u32, window.height() as u32),
+                                (vw, vh),
                                 Backends::GL,
                                 PowerPreference::HighPerformance,
                             )
@@ -140,23 +156,47 @@ pub extern "C" fn em_start(mut env: JNIEnv, path: JString) -> JBoolean {
                                 PlayerBuilder::new()
                                     .with_renderer(renderer)
                                     .with_movie(movie)
-                                    .with_log(PrintWriter::new())
-                                    .with_fullscreen(true)
+                                    .with_audio(AAudioAudioBackend::new().unwrap())
+                                    .with_log(NullLogBackend::new())
+                                    .with_viewport_dimensions(
+                                        vw,
+                                        vh,
+                                        dpi_scale_factor,
+                                    )
+                                    .with_letterbox(Letterbox::On)
                                     .build(),
                             );
-                        };
-                    }
-                    RuffleEvent::AdjustSurfaceSize(vw, vh) => {
-                        if let Some(player) = &player_ref {
-                            player
-                                .lock()
-                                .unwrap()
-                                .set_viewport_dimensions(ViewportDimensions {
-                                    width: vw as u32,
-                                    height: vh as u32,
-                                    scale_factor: 1.0,
-                                });
+
+                            if let Some(player_mtx) = &player_ref {
+                                player_mtx.lock()
+                                    .unwrap()
+                                    .set_is_playing(true);
+                            }
                         }
+                    },
+                    RuffleEvent::AdjustSurfaceSize(w, h) => {
+                        vw = w as u32;
+                        vh = h as u32;
+                        let Some(player_mtx) = &player_ref else {
+                            break;
+                        };
+                        player_mtx
+                            .lock()
+                            .unwrap()
+                            .set_viewport_dimensions(ViewportDimensions {
+                                width: vw,
+                                height: vh,
+                                scale_factor: dpi_scale_factor,
+                            });
+                    }
+                    RuffleEvent::DetachSurface() => {
+                        let Some(player_mtx) = &player_ref else {
+                            break;
+                        };
+                        player_mtx
+                            .lock()
+                            .unwrap()
+                            .set_is_playing(false);
                     }
                     RuffleEvent::Kill => break,
                 },
@@ -164,17 +204,113 @@ pub extern "C" fn em_start(mut env: JNIEnv, path: JString) -> JBoolean {
                     dbg!(e);
                 }
             }
-            if let Some(player_lock) = &player_ref {
-                let mut player = player_lock.lock().unwrap();
-                let dt = prev_frame_time.duration_since(Instant::now()).as_micros();
-                if dt > 0 && *STATE.read().unwrap() == State::RUNNING {
+            if let Some(player_mtx) = &player_ref {
+                let mut player = player_mtx.lock().unwrap();
+                let now = Instant::now();
+                let dt = now.duration_since(prev_frame_time).as_micros();
+                if dt > 0 {
+                    prev_frame_time = now;
                     player.tick(dt as f64 / 1000.0);
-                    prev_frame_time = Instant::now();
-
                     if player.needs_render() {
                         player.render();
                     }
+                    let audio =
+                        <dyn Any>::downcast_mut::<AAudioAudioBackend>(player.audio_mut()).unwrap();
+                    audio.recreate_stream_if_needed();
                 }
+
+                for port in 0..1 {
+                    let status = s_env
+                        .call_method(
+                            &s_thiz,
+                            "onNativePollInput",
+                            "(IIII)I",
+                            &[
+                                JValue::from(0),
+                                JValue::from(RETRO_DEVICE_JOYPAD),
+                                JValue::from(0),
+                                JValue::from(RETRO_DEVICE_ID_JOYPAD_MASK),
+                            ],
+                        )
+                        .expect("Failed to poll joypad state!")
+                        .i()
+                        .expect("Failed to poll joypad state!");
+
+                    let mut state = status >> RETRO_DEVICE_ID_JOYPAD_A & 0x1;
+                    InputDispatcher::dispacth_key_event(KeyEvent::new(Keycode::ButtonA, state), &mut player);
+
+                    state = status >> RETRO_DEVICE_ID_JOYPAD_B & 0x1;
+                    InputDispatcher::dispacth_key_event(KeyEvent::new(Keycode::ButtonB, state), &mut player);
+                    state = status >> RETRO_DEVICE_ID_JOYPAD_X & 0x1;
+                    InputDispatcher::dispacth_key_event(KeyEvent::new(Keycode::ButtonX, state), &mut player);
+                    state = status >> RETRO_DEVICE_ID_JOYPAD_Y & 0x1;
+                    InputDispatcher::dispacth_key_event(KeyEvent::new(Keycode::ButtonY, state), &mut player);
+                    state = status >> RETRO_DEVICE_ID_JOYPAD_LEFT & 0x1;
+                    InputDispatcher::dispacth_key_event(KeyEvent::new(Keycode::DpadLeft, state), &mut player);
+                    state = status >> RETRO_DEVICE_ID_JOYPAD_RIGHT & 0x1;
+                    InputDispatcher::dispacth_key_event(KeyEvent::new(Keycode::DpadRight, state), &mut player);
+                    state = status >> RETRO_DEVICE_ID_JOYPAD_UP & 0x1;
+                    InputDispatcher::dispacth_key_event(KeyEvent::new(Keycode::DpadUp, state), &mut player);
+                    state = status >> RETRO_DEVICE_ID_JOYPAD_DOWN & 0x1;
+                    InputDispatcher::dispacth_key_event(KeyEvent::new(Keycode::DpadDown, state), &mut player);
+                    state = status >> RETRO_DEVICE_ID_JOYPAD_SELECT & 0x1;
+                    InputDispatcher::dispacth_key_event(KeyEvent::new(Keycode::ButtonSelect, state), &mut player);
+                    state = status >> RETRO_DEVICE_ID_JOYPAD_START & 0x1;
+                    InputDispatcher::dispacth_key_event(KeyEvent::new(Keycode::ButtonStart, state), &mut player);
+                }
+                let pressed = s_env
+                    .call_method(
+                        &s_thiz,
+                        "onNativePollInput",
+                        "(IIII)I",
+                        &[
+                            JValue::from(0),
+                            JValue::from(RETRO_DEVICE_POINTER),
+                            JValue::from(0),
+                            JValue::from(RETRO_DEVICE_ID_POINTER_PRESSED),
+                        ],
+                    )
+                    .expect("Failed to poll pointer state!")
+                    .i()
+                    .expect("Failed to poll pointer state!")
+                    == KEY_DOWN;
+                let pointer_x = s_env
+                    .call_method(
+                        &s_thiz,
+                        "onNativePollInput",
+                        "(IIII)I",
+                        &[
+                            JValue::from(0),
+                            JValue::from(RETRO_DEVICE_POINTER),
+                            JValue::from(0),
+                            JValue::from(RETRO_DEVICE_ID_POINTER_X),
+                        ],
+                    )
+                    .expect("Failed to poll pointer state!")
+                    .i()
+                    .expect("Failed to poll pointer state!");
+                let pointer_y = s_env
+                    .call_method(
+                        &s_thiz,
+                        "onNativePollInput",
+                        "(IIII)I",
+                        &[
+                            JValue::from(0),
+                            JValue::from(RETRO_DEVICE_POINTER),
+                            JValue::from(0),
+                            JValue::from(RETRO_DEVICE_ID_POINTER_Y),
+                        ],
+                    )
+                    .expect("Failed to poll pointer state!")
+                    .i()
+                    .expect("Failed to poll pointer state!");
+                let dimension = player.viewport_dimensions();
+                let x = (pointer_x as f64 + 32767.0) * dimension.width as f64 / 65534.0;
+                let y = (pointer_y as f64 + 32767.0) * dimension.height as f64 / 65534.0;
+                InputDispatcher::dispacth_pointer_event(
+                    PointerEvent::new(x, y, pressed), 
+                    &mut player
+                );
             }
         }
     });
@@ -182,8 +318,64 @@ pub extern "C" fn em_start(mut env: JNIEnv, path: JString) -> JBoolean {
     JNI_TRUE
 }
 
-pub extern "C" fn JNI_OnLoad(vm: *mut jni::sys::JavaVM, _reserved: *mut c_void) -> JInt {
-    android_logger::init_once(android_logger::Config::default().with_tag("libruffle"));
+fn em_set_prop(mut env: JNIEnv, thiz: JObject, k: JString, prop: JObject) {
+    let key = JniUtils::to_string(&mut env, k);
+    match key.as_str() {
+        PROP_DISPLAY_SCALED_DENSITY => {
+            let val = JniUtils::to_float(&mut env, prop);
+            PROPS.lock().unwrap().set_prop(key.as_str(), val);
+        }
+        _ => (),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn JNI_OnLoad(vm: JavaVM, _reserved: *const c_void) -> jint {
+    android_logger::init_once(
+        android_logger::Config::default()
+            .with_max_level(LevelFilter::Info)
+            .with_tag("libruffle"),
+    );
+    let mut env = vm.get_env().unwrap();
+    let methods = [
+        NativeMethod {
+            name: "nativeStart".into(),
+            sig: "(Ljava/lang/String;)Z".into(),
+            fn_ptr: em_start as *mut _,
+        },
+        NativeMethod {
+            name: "nativeStop".into(),
+            sig: "()V".into(),
+            fn_ptr: em_stop as *mut _,
+        },
+        NativeMethod {
+            name: "nativeAttachSurface".into(),
+            sig: "(Landroid/app/Activity;Landroid/view/Surface;)V".into(),
+            fn_ptr: em_attach_surface as *mut _,
+        },
+        NativeMethod {
+            name: "nativeAdjustSurface".into(),
+            sig: "(II)V".into(),
+            fn_ptr: em_adjust_surface_size as *mut _,
+        },
+        NativeMethod {
+            name: "nativeDetachSurface".into(),
+            sig: "()V".into(),
+            fn_ptr: em_detach_surface as *mut _,
+        },
+        NativeMethod {
+            name: "nativeSetProp".into(),
+            sig: "(Ljava/lang/String;Ljava/lang/Object;)V".into(),
+            fn_ptr: em_set_prop as *mut _,
+        },
+    ];
+    assert!(
+        env.register_native_methods("com/outlook/wn123o/ruffletest/MainActivity", &methods)
+            .is_ok()
+    );
+    let (tx, rx) = mpsc::channel::<RuffleEvent>();
+    *TX.lock().unwrap() = Some(tx);
+    *RX.lock().unwrap() = Some(rx);
     JNI_VERSION_1_6
 }
 
