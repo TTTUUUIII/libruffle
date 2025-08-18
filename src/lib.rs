@@ -46,7 +46,7 @@ enum RuffleEvent {
     Kill,
 }
 
-const PROP_DISPLAY_SCALED_DENSITY: &str = "display.density";
+const PROP_DISPLAY_SCALED_DENSITY: &str = "ruffle_scale_factor";
 
 static TX: Mutex<Option<Sender<RuffleEvent>>> = Mutex::new(None);
 static RX: Mutex<Option<Receiver<RuffleEvent>>> = Mutex::new(None);
