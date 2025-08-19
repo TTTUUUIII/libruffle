@@ -35,7 +35,7 @@ use ruffle_render_wgpu::{
 
 use crate::{
     input::{
-        InputDispatcher, KeyAction, KeyEvent, PointerEvent, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_L, RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_MASK, RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_RIGHT, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_X, RETRO_DEVICE_ID_JOYPAD_Y, RETRO_DEVICE_ID_POINTER_PRESSED, RETRO_DEVICE_ID_POINTER_X, RETRO_DEVICE_ID_POINTER_Y, RETRO_DEVICE_JOYPAD, RETRO_DEVICE_POINTER
+        InputDispatcher, KeyAction, KeyEvent, TouchEvent, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_L, RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_MASK, RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_RIGHT, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_X, RETRO_DEVICE_ID_JOYPAD_Y, RETRO_DEVICE_ID_POINTER_PRESSED, RETRO_DEVICE_ID_POINTER_X, RETRO_DEVICE_ID_POINTER_Y, RETRO_DEVICE_JOYPAD, RETRO_DEVICE_POINTER
     }, media::AAudioAudioBackend, util::{JniUtils, Properties}
 };
 
@@ -204,7 +204,7 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
                             let mut player = player_mtx
                                 .lock()
                                 .unwrap();
-                            InputDispatcher::dispacth_key_event(event, &mut player);
+                            InputDispatcher::dispatch_key_event(event, &mut player);
                         }
                     }
                     RuffleEvent::Kill => break,
@@ -228,7 +228,7 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
                     audio.keep_stream_valid();
                 }
 
-                for port in 0..1 {
+                for port in 0..2 {
                     let status = s_env
                         .call_method(
                             &s_thiz,
@@ -245,31 +245,31 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
                         .i()
                         .expect("Failed to poll joypad status!");
 
-                    let mut action = status >> RETRO_DEVICE_ID_JOYPAD_A & 0x1;
-                    InputDispatcher::dispacth_key_event(KeyEvent::gamepad(Keycode::ButtonA, KeyAction::from(action)), &mut player);
+                    let mut is_down = status >> RETRO_DEVICE_ID_JOYPAD_A & 0x1 == 1;
+                    InputDispatcher::dispatch_key_event(KeyEvent::gamepad(port, Keycode::ButtonA, KeyAction::from(is_down)), &mut player);
 
-                    action = status >> RETRO_DEVICE_ID_JOYPAD_B & 0x1;
-                    InputDispatcher::dispacth_key_event(KeyEvent::gamepad(Keycode::ButtonB, KeyAction::from(action)), &mut player);
-                    action = status >> RETRO_DEVICE_ID_JOYPAD_X & 0x1;
-                    InputDispatcher::dispacth_key_event(KeyEvent::gamepad(Keycode::ButtonX, KeyAction::from(action)), &mut player);
-                    action = status >> RETRO_DEVICE_ID_JOYPAD_Y & 0x1;
-                    InputDispatcher::dispacth_key_event(KeyEvent::gamepad(Keycode::ButtonY, KeyAction::from(action)), &mut player);
-                    action = status >> RETRO_DEVICE_ID_JOYPAD_LEFT & 0x1;
-                    InputDispatcher::dispacth_key_event(KeyEvent::gamepad(Keycode::DpadLeft, KeyAction::from(action)), &mut player);
-                    action = status >> RETRO_DEVICE_ID_JOYPAD_RIGHT & 0x1;
-                    InputDispatcher::dispacth_key_event(KeyEvent::gamepad(Keycode::DpadRight, KeyAction::from(action)), &mut player);
-                    action = status >> RETRO_DEVICE_ID_JOYPAD_UP & 0x1;
-                    InputDispatcher::dispacth_key_event(KeyEvent::gamepad(Keycode::DpadUp, KeyAction::from(action)), &mut player);
-                    action = status >> RETRO_DEVICE_ID_JOYPAD_DOWN & 0x1;
-                    InputDispatcher::dispacth_key_event(KeyEvent::gamepad(Keycode::DpadDown, KeyAction::from(action)), &mut player);
-                    action = status >> RETRO_DEVICE_ID_JOYPAD_SELECT & 0x1;
-                    InputDispatcher::dispacth_key_event(KeyEvent::gamepad(Keycode::ButtonSelect, KeyAction::from(action)), &mut player);
-                    action = status >> RETRO_DEVICE_ID_JOYPAD_START & 0x1;
-                    InputDispatcher::dispacth_key_event(KeyEvent::gamepad(Keycode::ButtonStart, KeyAction::from(action)), &mut player);
-                    action = status >> RETRO_DEVICE_ID_JOYPAD_L & 0x1;
-                    InputDispatcher::dispacth_key_event(KeyEvent::gamepad(Keycode::ButtonL1, KeyAction::from(action)), &mut player);
-                    action = status >> RETRO_DEVICE_ID_JOYPAD_R & 0x1;
-                    InputDispatcher::dispacth_key_event(KeyEvent::gamepad(Keycode::ButtonR1, KeyAction::from(action)), &mut player);
+                    is_down = status >> RETRO_DEVICE_ID_JOYPAD_B & 0x1 == 1;
+                    InputDispatcher::dispatch_key_event(KeyEvent::gamepad(port, Keycode::ButtonB, KeyAction::from(is_down)), &mut player);
+                    is_down = status >> RETRO_DEVICE_ID_JOYPAD_X & 0x1 == 1;
+                    InputDispatcher::dispatch_key_event(KeyEvent::gamepad(port, Keycode::ButtonX, KeyAction::from(is_down)), &mut player);
+                    is_down = status >> RETRO_DEVICE_ID_JOYPAD_Y & 0x1 == 1;
+                    InputDispatcher::dispatch_key_event(KeyEvent::gamepad(port, Keycode::ButtonY, KeyAction::from(is_down)), &mut player);
+                    is_down = status >> RETRO_DEVICE_ID_JOYPAD_LEFT & 0x1 == 1;
+                    InputDispatcher::dispatch_key_event(KeyEvent::gamepad(port, Keycode::DpadLeft, KeyAction::from(is_down)), &mut player);
+                    is_down = status >> RETRO_DEVICE_ID_JOYPAD_RIGHT & 0x1 == 1;
+                    InputDispatcher::dispatch_key_event(KeyEvent::gamepad(port, Keycode::DpadRight, KeyAction::from(is_down)), &mut player);
+                    is_down = status >> RETRO_DEVICE_ID_JOYPAD_UP & 0x1 == 1;
+                    InputDispatcher::dispatch_key_event(KeyEvent::gamepad(port, Keycode::DpadUp, KeyAction::from(is_down)), &mut player);
+                    is_down = status >> RETRO_DEVICE_ID_JOYPAD_DOWN & 0x1 == 1;
+                    InputDispatcher::dispatch_key_event(KeyEvent::gamepad(port, Keycode::DpadDown, KeyAction::from(is_down)), &mut player);
+                    is_down = status >> RETRO_DEVICE_ID_JOYPAD_SELECT & 0x1 == 1;
+                    InputDispatcher::dispatch_key_event(KeyEvent::gamepad(port, Keycode::ButtonSelect, KeyAction::from(is_down)), &mut player);
+                    is_down = status >> RETRO_DEVICE_ID_JOYPAD_START & 0x1 == 1;
+                    InputDispatcher::dispatch_key_event(KeyEvent::gamepad(port, Keycode::ButtonStart, KeyAction::from(is_down)), &mut player);
+                    is_down = status >> RETRO_DEVICE_ID_JOYPAD_L & 0x1 == 1;
+                    InputDispatcher::dispatch_key_event(KeyEvent::gamepad(port, Keycode::ButtonL1, KeyAction::from(is_down)), &mut player);
+                    is_down = status >> RETRO_DEVICE_ID_JOYPAD_R & 0x1 == 1;
+                    InputDispatcher::dispatch_key_event(KeyEvent::gamepad(port, Keycode::ButtonR1, KeyAction::from(is_down)), &mut player);
                 }
                 let pressed = s_env
                     .call_method(
@@ -320,8 +320,8 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
                 let dimension = player.viewport_dimensions();
                 let x = (pointer_x as f64 + 32767.0) * dimension.width as f64 / 65534.0;
                 let y = (pointer_y as f64 + 32767.0) * dimension.height as f64 / 65534.0;
-                InputDispatcher::dispacth_pointer_event(
-                    PointerEvent::new(x, y, pressed), 
+                InputDispatcher::dispatch_touch_event(
+                    TouchEvent::new(x, y, KeyAction::from(pressed)), 
                     &mut player
                 );
             }
@@ -342,7 +342,7 @@ fn em_set_prop(mut env: JNIEnv, _thiz: JObject, k: JString, prop: JObject) {
     }
 }
 
-fn em_dispatch_keyboard_event(mut env: JNIEnv, _thiz: JObject, event: JObject) -> jboolean {
+fn em_dispatch_key_event(mut env: JNIEnv, _thiz: JObject, event: JObject) -> jboolean {
     let key = env.call_method(&event, "getKeyCode", "()I", &[])
         .expect("Failed to call KeyEvent::getKeyCode() method!")
         .i()
@@ -351,7 +351,6 @@ fn em_dispatch_keyboard_event(mut env: JNIEnv, _thiz: JObject, event: JObject) -
         .expect("Failed to call KeyEvent::getAction() method!")
         .i()
         .expect("Failed to call KeyEvent::getAction() method!");
-    error!("{key}, {action}");
     send_event(RuffleEvent::HandleKeyEvent(KeyEvent::new(Keycode::from(key), KeyAction::from(action))));
     JNI_TRUE
 }
@@ -396,9 +395,9 @@ pub extern "C" fn JNI_OnLoad(vm: JavaVM, _reserved: *const c_void) -> jint {
             fn_ptr: em_set_prop as *mut _,
         },
         NativeMethod {
-            name: "nativeDispatchKeyboardEvent".into(),
+            name: "nativeDispatchKeyEvent".into(),
             sig: "(Landroid/view/KeyEvent;)Z".into(),
-            fn_ptr: em_dispatch_keyboard_event as *mut _,
+            fn_ptr: em_dispatch_key_event as *mut _,
         }
     ];
     assert!(
