@@ -410,6 +410,16 @@ pub extern "C" fn JNI_OnLoad(vm: JavaVM, _reserved: *const c_void) -> jint {
     JNI_VERSION_1_6
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn JNI_OnUnload(
+    vm: JavaVM,
+    _reserved: *const c_void,
+) {
+    let mut env = vm.get_env()
+        .unwrap();
+    let _ = env.unregister_native_methods("org/wkuwku/plug/ruffle/Ruffle");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
