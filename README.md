@@ -2,8 +2,4 @@ This is a [ruffle](https://github.com/ruffle-rs/ruffle) library suitable for [Wk
 
 Known issues:
 
-- black screen issue occurs;
-
 - incorrect video scaling in portrait mode;
-
-- performance is terrible.
