@@ -23,8 +23,9 @@ ruffle_core ={ git = "https://github.com/ruffle-rs/ruffle", branch = "master", f
 ] }
 ruffle_video_software = { git = "https://github.com/ruffle-rs/ruffle", branch = "master" }
 ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle", branch = "master" }
-lazy_static = "1.5.0"
+ruffle_frontend_utils = { git = "https://github.com/ruffle-rs/ruffle.git", branch = "master" }
 log = "0.4.27"
 once_cell = "1.21.3"
+tokio = { version = "1.47.1", features = ["macros", "rt", "sync"] }
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.15.1"

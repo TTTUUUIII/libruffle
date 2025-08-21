@@ -2,15 +2,9 @@ mod media;
 mod input;
 mod util;
 use std::{
-    any::Any,
-    os::raw::c_void,
-    ptr::NonNull,
-    sync::{
-        Arc, Mutex,
-        mpsc::{self, Receiver, Sender},
-    },
-    thread::{self, JoinHandle},
-    time::Instant,
+    any::Any, os::raw::c_void, path::{Path, PathBuf}, ptr::NonNull, sync::{
+        mpsc::{self, Receiver, Sender}, Arc, Mutex
+    }, thread::{self, JoinHandle}, time::Instant
 };
 
 use jni::{
@@ -24,6 +18,7 @@ use ndk_sys::ANativeWindow_fromSurface;
 use ruffle_core::{
     backend::log::NullLogBackend, config::Letterbox, tag_utils::SwfMovie, Player, PlayerBuilder, ViewportDimensions
 };
+use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 use ruffle_render_wgpu::{
     backend::WgpuRenderBackend,
     target::SwapChainTarget,
@@ -36,7 +31,7 @@ use ruffle_render_wgpu::{
 use crate::{
     input::{
         InputDispatcher, KeyAction, KeyEvent, TouchEvent, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_L, RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_MASK, RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_RIGHT, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_X, RETRO_DEVICE_ID_JOYPAD_Y, RETRO_DEVICE_ID_POINTER_PRESSED, RETRO_DEVICE_ID_POINTER_X, RETRO_DEVICE_ID_POINTER_Y, RETRO_DEVICE_JOYPAD, RETRO_DEVICE_POINTER
-    }, media::AAudioAudioBackend, util::{JniUtils, Properties}
+    }, media::AAudioAudioBackend, util::{JniUtils, Properties, TypedValue}
 };
 
 enum RuffleEvent {
@@ -47,7 +42,8 @@ enum RuffleEvent {
     Kill,
 }
 
-const PROP_DISPLAY_SCALED_DENSITY: &str = "ruffle_scale_factor";
+const PROP_SCALED_DENSITY: &str = "ruffle_scale_factor";
+const PROP_SAVE_DIRECTORY: &str = "ruffle_save_directory";
 
 static TX: Mutex<Option<Sender<RuffleEvent>>> = Mutex::new(None);
 static RX: Mutex<Option<Receiver<RuffleEvent>>> = Mutex::new(None);
@@ -96,7 +92,7 @@ fn em_stop(_env: JNIEnv, _thiz: JObject) {
 }
 
 fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
-    let filepath = JniUtils::to_string(&mut env, path);
+    let movie_path = JniUtils::to_string(&mut env, path);
     let vm = env.get_java_vm().unwrap();
     let s_thiz = env
         .new_global_ref(thiz)
@@ -107,11 +103,12 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
         let mut s_env = vm
             .attach_current_thread()
             .expect("Failed to attach env thread");
-        let dpi_scale_factor = PROPS
-            .lock()
-            .unwrap()
-            .get_float(PROP_DISPLAY_SCALED_DENSITY, 1.0) as f64;
 
+        let mut prop_ref = PROPS
+            .lock()
+            .unwrap();
+        let dpi_scale_factor = prop_ref
+            .f(PROP_SCALED_DENSITY, 1.0);
         loop {
             match poll_event() {
                 Ok(event) => match event {
@@ -135,7 +132,15 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
                             );
                             player.set_is_playing(true);
                         } else {
-                            let movie = SwfMovie::from_path(&filepath, None).unwrap();
+                            let movie_root_path = Path::new(&movie_path)
+                                .parent()
+                                .unwrap()
+                                .to_string_lossy()
+                                .into_owned();
+                            let stroage_path = prop_ref
+                                .s(PROP_SAVE_DIRECTORY)
+                                .unwrap_or(&movie_root_path);
+                            let movie = SwfMovie::from_path(&movie_path, None).unwrap();
                             let renderer = WgpuRenderBackend::for_window_unsafe(
                                 SurfaceTargetUnsafe::RawHandle {
                                     raw_display_handle: RawDisplayHandle::Android(
@@ -152,15 +157,17 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
                                 PlayerBuilder::new()
                                     .with_renderer(renderer)
                                     .with_movie(movie)
+                                    .with_storage(Box::new(DiskStorageBackend::new(PathBuf::from(stroage_path))))
                                     .with_audio(AAudioAudioBackend::new().unwrap())
                                     .with_log(NullLogBackend::new())
                                     .with_viewport_dimensions(
                                         vw,
                                         vh,
-                                        dpi_scale_factor,
+                                        dpi_scale_factor as f64,
                                     )
                                     .with_letterbox(Letterbox::On)
-                                    .build(),
+                                    .with_avm2_optimizer_enabled(true)
+                                    .build()
                             );
 
                             if let Some(player_mtx) = &player_ref {
@@ -187,7 +194,7 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
                             .set_viewport_dimensions(ViewportDimensions {
                                 width: vw as u32,
                                 height: vh as u32,
-                                scale_factor: dpi_scale_factor,
+                                scale_factor: dpi_scale_factor as f64,
                             });
                         }
                     }
@@ -334,9 +341,17 @@ fn em_start(mut env: JNIEnv, thiz: JObject, path: JString) -> jboolean {
 fn em_set_prop(mut env: JNIEnv, _thiz: JObject, k: JString, prop: JObject) {
     let key = JniUtils::to_string(&mut env, k);
     match key.as_str() {
-        PROP_DISPLAY_SCALED_DENSITY => {
-            let val = JniUtils::to_float(&mut env, prop);
-            PROPS.lock().unwrap().set_prop(key.as_str(), val);
+        PROP_SCALED_DENSITY => {
+            PROPS
+                .lock()
+                .unwrap()
+                .put(key.as_str(), TypedValue::F(JniUtils::as_float(&mut env, prop)));
+        }
+        PROP_SAVE_DIRECTORY => {
+            PROPS
+                .lock()
+                .unwrap()
+                .put(key.as_str(), TypedValue::S(JniUtils::as_string(&mut env, prop)));
         }
         _ => (),
     }
