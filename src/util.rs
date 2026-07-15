@@ -43,7 +43,6 @@ impl JniUtils{
 
 #[derive(Clone, Debug)]
 pub enum TypedValue {
-    I(i32),
     F(f32),
     S(String)
 }

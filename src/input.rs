@@ -3,7 +3,7 @@ use std::{
     fmt::Display,
     i32,
     sync::{
-        Mutex, MutexGuard,
+        MutexGuard,
         atomic::{self, AtomicBool},
     },
 };
@@ -15,41 +15,35 @@ use ruffle_core::{
     events::{KeyDescriptor, KeyLocation, LogicalKey, MouseButton, NamedKey, PhysicalKey},
 };
 
-pub const RETRO_DEVICE_JOYPAD: i32 = 1;
-pub const RETRO_DEVICE_POINTER: i32 = 6;
+// pub const RETRO_DEVICE_JOYPAD: i32 = 1;
+// pub const RETRO_DEVICE_POINTER: i32 = 6;
 
-pub const RETRO_DEVICE_ID_JOYPAD_B: i32 = 0;
-pub const RETRO_DEVICE_ID_JOYPAD_Y: i32 = 1;
-pub const RETRO_DEVICE_ID_JOYPAD_SELECT: i32 = 2;
-pub const RETRO_DEVICE_ID_JOYPAD_START: i32 = 3;
-pub const RETRO_DEVICE_ID_JOYPAD_UP: i32 = 4;
-pub const RETRO_DEVICE_ID_JOYPAD_DOWN: i32 = 5;
-pub const RETRO_DEVICE_ID_JOYPAD_LEFT: i32 = 6;
-pub const RETRO_DEVICE_ID_JOYPAD_RIGHT: i32 = 7;
-pub const RETRO_DEVICE_ID_JOYPAD_A: i32 = 8;
-pub const RETRO_DEVICE_ID_JOYPAD_X: i32 = 9;
-pub const RETRO_DEVICE_ID_JOYPAD_L: i32 = 10;
-pub const RETRO_DEVICE_ID_JOYPAD_R: i32 = 11;
+// pub const RETRO_DEVICE_ID_JOYPAD_B: i32 = 0;
+// pub const RETRO_DEVICE_ID_JOYPAD_Y: i32 = 1;
+// pub const RETRO_DEVICE_ID_JOYPAD_SELECT: i32 = 2;
+// pub const RETRO_DEVICE_ID_JOYPAD_START: i32 = 3;
+// pub const RETRO_DEVICE_ID_JOYPAD_UP: i32 = 4;
+// pub const RETRO_DEVICE_ID_JOYPAD_DOWN: i32 = 5;
+// pub const RETRO_DEVICE_ID_JOYPAD_LEFT: i32 = 6;
+// pub const RETRO_DEVICE_ID_JOYPAD_RIGHT: i32 = 7;
+// pub const RETRO_DEVICE_ID_JOYPAD_A: i32 = 8;
+// pub const RETRO_DEVICE_ID_JOYPAD_X: i32 = 9;
+// pub const RETRO_DEVICE_ID_JOYPAD_L: i32 = 10;
+// pub const RETRO_DEVICE_ID_JOYPAD_R: i32 = 11;
 // pub const RETRO_DEVICE_ID_JOYPAD_L2: i32        = 12;
 // pub const RETRO_DEVICE_ID_JOYPAD_R2: i32        = 13;
 // pub const RETRO_DEVICE_ID_JOYPAD_L3: i32        = 14;
 // pub const RETRO_DEVICE_ID_JOYPAD_R3: i32        = 15;
-pub const RETRO_DEVICE_ID_JOYPAD_MASK: i32 = 256;
+// pub const RETRO_DEVICE_ID_JOYPAD_MASK: i32 = 256;
 
-pub const RETRO_DEVICE_ID_POINTER_X: i32 = 0;
-pub const RETRO_DEVICE_ID_POINTER_Y: i32 = 1;
-pub const RETRO_DEVICE_ID_POINTER_PRESSED: i32 = 2;
+// pub const RETRO_DEVICE_ID_POINTER_X: i32 = 0;
+// pub const RETRO_DEVICE_ID_POINTER_Y: i32 = 1;
+// pub const RETRO_DEVICE_ID_POINTER_PRESSED: i32 = 2;
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum KeyAction {
     Down,
     Up,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum InputSource {
-    Keyboard,
-    Gamepad,
 }
 
 impl Display for KeyAction {
@@ -88,10 +82,8 @@ impl From<bool> for KeyAction {
 
 #[derive(Clone, Copy, Debug)]
 pub struct KeyEvent {
-    port: i32,
     key: Keycode,
-    action: KeyAction,
-    source: InputSource,
+    action: KeyAction
 }
 
 impl Display for KeyEvent {
@@ -108,47 +100,22 @@ impl Display for KeyEvent {
 impl KeyEvent {
     pub fn new(key: Keycode, action: KeyAction) -> Self {
         Self {
-            port: 0,
             key,
-            action,
-            source: InputSource::Keyboard,
-        }
-    }
-
-    pub fn gamepad(port: i32, key: Keycode, action: KeyAction) -> Self {
-        Self {
-            port,
-            key,
-            action,
-            source: InputSource::Gamepad,
+            action
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct TouchEvent {
-    x: f64,
-    y: f64,
-    action: KeyAction,
+    pub x: f64,
+    pub y: f64,
+    pub action: KeyAction,
 }
 
 impl TouchEvent {
     pub fn new(x: f64, y: f64, action: KeyAction) -> Self {
         Self { x, y, action }
-    }
-}
-
-struct KeyState {
-    action: KeyAction,
-    descriptor: KeyDescriptor,
-}
-
-impl KeyState {
-    fn new(descriptor: KeyDescriptor) -> Self {
-        Self {
-            action: KeyAction::Up,
-            descriptor: descriptor,
-        }
     }
 }
 
@@ -160,166 +127,10 @@ static KEYCODE_DESCRIPTORS: Lazy<HashMap<i32, KeyDescriptor>> = Lazy::new(|| {
     it
 });
 
-// for gamepad
-static P0_ROUTE_TABLE: Lazy<Mutex<HashMap<i32, KeyState>>> =
-    Lazy::new(|| Mutex::new(InputDispatcher::build_route_table(0)));
-static P1_ROUTE_TABLE: Lazy<Mutex<HashMap<i32, KeyState>>> =
-    Lazy::new(|| Mutex::new(InputDispatcher::build_route_table(1)));
 static POINTER_ACTION: AtomicBool = AtomicBool::new(false);
 
 pub struct InputDispatcher;
 impl InputDispatcher {
-    fn build_route_table(port: i32) -> HashMap<i32, KeyState> {
-        let mut it = HashMap::new();
-
-        if port == 1 {
-            // Pad Left => A
-            let mut key: i32 = Keycode::DpadLeft.into();
-            let mut desc = Self::get_descriptor(Keycode::A).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Pad Right => D
-            key = Keycode::DpadRight.into();
-            desc = Self::get_descriptor(Keycode::D).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Pad Up => W
-            key = Keycode::DpadUp.into();
-            desc = Self::get_descriptor(Keycode::W).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Pad Down => S
-            key = Keycode::DpadDown.into();
-            desc = Self::get_descriptor(Keycode::S).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button A => G,
-            key = Keycode::ButtonA.into();
-            desc = Self::get_descriptor(Keycode::G).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button B => H
-            key = Keycode::ButtonB.into();
-            desc = Self::get_descriptor(Keycode::H).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button X => T
-            key = Keycode::ButtonX.into();
-            desc = Self::get_descriptor(Keycode::T).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button Y => Y
-            key = Keycode::ButtonY.into();
-            desc = Self::get_descriptor(Keycode::Y).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button Select => Tab
-            key = Keycode::ButtonSelect.into();
-            desc = Self::get_descriptor(Keycode::Tab).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button Start => Enter
-            key = Keycode::ButtonStart.into();
-            desc = Self::get_descriptor(Keycode::Enter).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button L1 => 7
-            key = Keycode::ButtonL1.into();
-            desc = Self::get_descriptor(Keycode::Keycode7).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button R1 => 8
-            key = Keycode::ButtonR1.into();
-            desc = Self::get_descriptor(Keycode::Keycode8).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button L2 => 9
-            key = Keycode::ButtonL1.into();
-            desc = Self::get_descriptor(Keycode::Keycode9).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button R2 => 0
-            key = Keycode::ButtonR1.into();
-            desc = Self::get_descriptor(Keycode::Keycode0).unwrap();
-            it.insert(key, KeyState::new(desc));
-        } else {
-            // Pad Left => ArrowLeft
-            let mut key: i32 = Keycode::DpadLeft.into();
-            let mut desc = Self::get_descriptor(Keycode::DpadLeft).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Pad Right => ArrowRight
-            key = Keycode::DpadRight.into();
-            desc = Self::get_descriptor(Keycode::DpadRight).unwrap();
-            it.insert(key, KeyState::new(desc));
-            // Pad Up => ArrowUp
-            key = Keycode::DpadUp.into();
-            desc = Self::get_descriptor(Keycode::DpadUp).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Pad Down => ArrowDown
-            key = Keycode::DpadDown.into();
-            desc = Self::get_descriptor(Keycode::DpadDown).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button A => ,
-            key = Keycode::ButtonA.into();
-            desc = Self::get_descriptor(Keycode::Comma).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button B => .
-            key = Keycode::ButtonB.into();
-            desc = Self::get_descriptor(Keycode::Period).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button X => K
-            key = Keycode::ButtonX.into();
-            desc = Self::get_descriptor(Keycode::K).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button Y => L
-            key = Keycode::ButtonY.into();
-            desc = Self::get_descriptor(Keycode::L).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button Select => Tab
-            key = Keycode::ButtonSelect.into();
-            desc = Self::get_descriptor(Keycode::Tab).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button Start => Enter
-            key = Keycode::ButtonStart.into();
-            desc = Self::get_descriptor(Keycode::Enter).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button L1 => 1
-            key = Keycode::ButtonL1.into();
-            desc = Self::get_descriptor(Keycode::Keycode1).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button R1 => 2
-            key = Keycode::ButtonR1.into();
-            desc = Self::get_descriptor(Keycode::Keycode2).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button L2 => 3
-            key = Keycode::ButtonL1.into();
-            desc = Self::get_descriptor(Keycode::Keycode3).unwrap();
-            it.insert(key, KeyState::new(desc));
-
-            // Button R2 => 4
-            key = Keycode::ButtonR1.into();
-            desc = Self::get_descriptor(Keycode::Keycode4).unwrap();
-            it.insert(key, KeyState::new(desc));
-        }
-
-        it
-    }
-
-    fn get_descriptor(keycode: Keycode) -> Option<KeyDescriptor> {
-        let key: i32 = keycode.into();
-        KEYCODE_DESCRIPTORS.get(&key).copied()
-    }
 
     pub fn dispatch_touch_event<'a>(event: TouchEvent, player: &mut MutexGuard<'a, Player>) {
         let current_action = KeyAction::from(POINTER_ACTION.load(atomic::Ordering::Relaxed));
@@ -349,27 +160,7 @@ impl InputDispatcher {
     }
 
     pub fn dispatch_key_event<'a>(event: KeyEvent, player: &mut MutexGuard<'a, Player>) {
-        if event.source == InputSource::Gamepad {
-            let mut route_table = if event.port == 1 {
-                P1_ROUTE_TABLE.lock().unwrap()
-            } else {
-                P0_ROUTE_TABLE.lock().unwrap()
-            };
-            if let Some(key_state) = route_table.get_mut(&event.key.into()) {
-                if key_state.action != event.action {
-                    if event.action == KeyAction::Down {
-                        player.handle_event(PlayerEvent::KeyDown {
-                            key: key_state.descriptor,
-                        });
-                    } else {
-                        player.handle_event(PlayerEvent::KeyUp {
-                            key: key_state.descriptor,
-                        });
-                    }
-                    key_state.action = event.action;
-                };
-            }
-        } else if let Some(descriptor) = KEYCODE_DESCRIPTORS.get(&event.key.into()) {
+        if let Some(descriptor) = KEYCODE_DESCRIPTORS.get(&event.key.into()) {
             if event.action == KeyAction::Down {
                 player.handle_event(PlayerEvent::KeyDown { key: *descriptor });
             } else {
